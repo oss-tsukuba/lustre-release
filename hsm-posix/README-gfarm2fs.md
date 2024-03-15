@@ -36,8 +36,10 @@
   - sudo lfs hsm_state FILENAME
     - "released exists archived"
   - sudo lfs hsm_restore FILENAME
+  - sudo lfs hsm_state FILENAME
     - "exists archived"
   - sudo lfs hsm_remove FILENAME
+  - sudo lfs hsm_state FILENAME
     - "file: (0x00000000),"
 
 ## HSM details
@@ -46,5 +48,6 @@
 
 ## Copyright
 
+- See ../COPYING
 - Copyright 2024 Osamu Tatebe
 - Copyright 2024 Takuya Ishibashi
