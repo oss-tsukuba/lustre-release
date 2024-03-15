@@ -910,6 +910,7 @@ static int ct_copy_xattr(const char *src, const char *dst, int src_fd,
 	char	*name;
 	ssize_t	 list_len;
 	int	 rc;
+	int      save_errno;
 
 	list_len = flistxattr(src_fd, list, sizeof(list));
 	if (list_len < 0)
@@ -921,22 +922,92 @@ static int ct_copy_xattr(const char *src, const char *dst, int src_fd,
 		if (rc < 0)
 			return -errno;
 
+/* 0: original behavior */
+/* #define SAVE_XATTR_TRUSTED_TO_XATTR_USER 1 */
+#if SAVE_XATTR_TRUSTED_TO_XATTR_USER
+		if (!is_restore) {
+			if (strncmp(XATTR_TRUSTED_PREFIX, name,
+			    sizeof(XATTR_TRUSTED_PREFIX) - 1) != 0) {
+				rc = fsetxattr(dst_fd, name, value, rc, 0);
+				save_errno = errno;
+				CT_TRACE("fsetxattr [1] of '%s' on '%s'"
+					 " rc=%d (%s)",
+					 name, dst, rc, strerror(save_errno));
+			} else {
+				/* trusted.* -> user.trusted.* */
+				char *namext = malloc(strlen(XATTR_USER_PREFIX)
+						      + strlen(name) + 1);
+				if (namext == NULL) {
+					CT_ERROR(rc, "cannot malloc"
+						" '%s'", name);
+					return -ENOMEM;
+				}
+				strcpy(namext, XATTR_USER_PREFIX);
+				strcat(namext, name);
+				rc = fsetxattr(dst_fd, namext, value, rc, 0);
+				save_errno = errno;
+				CT_TRACE("fsetxattr [2] of '%s' on '%s' rc=%d"
+					 " (%s)",
+					 namext, dst, rc,
+					 strerror(save_errno));
+				free(namext);
+			}
+			/* lustre.* attrs aren't supported on other FS's */
+			if (rc < 0 && save_errno != EOPNOTSUPP) {
+				rc = -save_errno;
+				CT_ERROR(rc, "cannot set extended attribute"
+					 " '%s' of '%s'",
+					 name, dst);
+				return rc;
+			}
+		} else { /* not used? */
+			/* restore */
+			/* when we restore, we do not restore lustre xattr */
+			char namext[sizeof(XATTR_USER_PREFIX)
+				    + sizeof(XATTR_TRUSTED_PREFIX)];
+			strcpy(namext, XATTR_USER_PREFIX);
+			strcat(namext, XATTR_TRUSTED_PREFIX);
+			/* ignore trusted.* and user.trusted.* */
+			if (strncmp(XATTR_TRUSTED_PREFIX, name,
+				    sizeof(XATTR_TRUSTED_PREFIX) - 1) != 0
+			  && strncmp(name, namext, strlen(namext)) != 0) {
+				rc = fsetxattr(dst_fd, name, value, rc, 0);
+				save_errno = errno;
+				CT_TRACE("fsetxattr [3] of '%s' on '%s'"
+					 " rc=%d (%s)",
+					 name, dst, rc, strerror(save_errno));
+				/* lustre.* attrs aren't supported
+				   on other FS's */
+				if (rc < 0 && save_errno != EOPNOTSUPP) {
+					rc = -save_errno;
+					CT_ERROR(rc, "cannot set extended"
+						 " attribute '%s' of '%s'",
+						 name, dst);
+					return rc;
+				}
+			}
+		}
+
+#else  /* SAVE_XATTR_TRUSTED_TO_XATTR_USER */
 		/* when we restore, we do not restore lustre xattr */
 		if (!is_restore ||
 		    (strncmp(XATTR_TRUSTED_PREFIX, name,
 			     sizeof(XATTR_TRUSTED_PREFIX) - 1) != 0)) {
 			rc = fsetxattr(dst_fd, name, value, rc, 0);
+			save_errno = errno;
 			CT_TRACE("fsetxattr of '%s' on '%s' rc=%d (%s)",
-				 name, dst, rc, strerror(errno));
+				 name, dst, rc, strerror(save_errno));
 			/* lustre.* attrs aren't supported on other FS's */
-			if (rc < 0 && errno != EOPNOTSUPP) {
-				rc = -errno;
+			if (rc < 0 && save_errno != EOPNOTSUPP) {
+				rc = -save_errno;
 				CT_ERROR(rc, "cannot set extended attribute"
 					 " '%s' of '%s'",
 					 name, dst);
 				return rc;
 			}
 		}
+#endif  /* SAVE_XATTR_TRUSTED_TO_XATTR_USER */
+
 		name += strlen(name) + 1;
 	}
 
